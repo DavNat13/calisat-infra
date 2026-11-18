@@ -1,0 +1,59 @@
+# Cluster RabbitMQ de 3 nodos (rabbit1 es el seed; rabbit2/3 se unen solos).
+# Uso: docker compose up -d   |  UI: http://localhost:15672 (calisat-app / Calisat2026!)
+# Los microservicios apuntan a: SPRING_RABBITMQ_HOST=localhost, PORT=5672 (rabbit1)
+x-rabbit: &rabbit
+  image: rabbitmq:3.13-management
+  restart: unless-stopped
+  environment: &rabbit-env
+    RABBITMQ_ERLANG_COOKIE: calisat-cluster-cookie
+    RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-calisat-app}
+    RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-Calisat2026!}
+  networks: [calisat-net]
+
+services:
+  rabbit1:
+    <<: *rabbit
+    container_name: calisat-rabbit1
+    hostname: rabbit1
+    ports: ["5672:5672", "15672:15672"]
+    volumes: [rabbit1_data:/var/lib/rabbitmq]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  rabbit2:
+    <<: *rabbit
+    container_name: calisat-rabbit2
+    hostname: rabbit2
+    ports: ["5673:5672", "15673:15672"]
+    depends_on: { rabbit1: { condition: service_healthy } }
+    volumes: [rabbit2_data:/var/lib/rabbitmq]
+    command: >
+      bash -c "rabbitmq-server -detached && sleep 15 &&
+      rabbitmqctl stop_app && rabbitmqctl join_cluster rabbit@rabbit1 &&
+      rabbitmqctl start_app && tail -f /dev/null"
+
+  rabbit3:
+    <<: *rabbit
+    container_name: calisat-rabbit3
+    hostname: rabbit3
+    ports: ["5674:5672", "15674:15672"]
+    depends_on: { rabbit1: { condition: service_healthy } }
+    volumes: [rabbit3_data:/var/lib/rabbitmq]
+    command: >
+      bash -c "rabbitmq-server -detached && sleep 15 &&
+      rabbitmqctl stop_app && rabbitmqctl join_cluster rabbit@rabbit1 &&
+      rabbitmqctl start_app && tail -f /dev/null"
+
+  # Politica HA: colas espejadas/quorum se declaran desde la app o ms-rabbit-admin.
+volumes:
+  rabbit1_data:
+  rabbit2_data:
+  rabbit3_data:
+
+networks:
+  calisat-net:
+    name: calisat-net
+    driver: bridge
